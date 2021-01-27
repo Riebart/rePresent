@@ -5,24 +5,18 @@
 #include <sys/time.h> // for gettimeofday()
 #include <unistd.h>   // for usleep()
 
-// #include <lz4frame.h>
+#include <string.h>
 
-// #define LZ4_IN_CHUNK_SIZE (16 * 1024)
-
-// static const LZ4F_preferences_t kPrefs = {
-//     {LZ4F_max256KB, LZ4F_blockLinked, LZ4F_noContentChecksum, LZ4F_frame,
-//      0 /* unknown content size */, 0 /* no dictID */, LZ4F_noBlockChecksum},
-//     0,         /* compression level; 0 == default */
-//     0,         /* autoflush */
-//     0,         /* favor decompression speed */
-//     {0, 0, 0}, /* reserved, must be set to 0 */
-// };
+#include <lz4.h> // for LZ4_compressBound, LZ4_compress_default, LZ4_decompress_safe
 
 // #define VERBOSE
 
+// The lower two bits indicate the frame compression type
+// The third bit indicates whether it is partial.
 #define FRAME_TYPE_FULL 0
 #define FRAME_TYPE_RLE 1
 #define FRAME_TYPE_LZ4 2
+// #define FRAME_PARTIAL 4 // Future
 
 #define SWAP(a, b, t) \
     {                 \
@@ -93,13 +87,49 @@ uint32_t write_frame_rle(ARRAY_TYPE *buf, uint32_t bufsize, FILE *ofp)
     return bytes_written;
 }
 
-uint32_t write_frame_keyframe(ARRAY_TYPE *buf, uint32_t bufsize, FILE *ofp)
+uint32_t write_frame_raw(ARRAY_TYPE *buf, uint32_t bufsize, FILE *ofp)
 {
     int8_t frame_type = FRAME_TYPE_FULL;
     uint32_t bytes_written = 0;
     bytes_written += fwrite(&frame_type, 1, 1, ofp);
-    bytes_written += fwrite(buf, bufsize, 1, ofp);
+    bytes_written += bufsize * fwrite(buf, bufsize, 1, ofp);
     fflush(ofp);
+
+    return bytes_written;
+}
+
+uint32_t write_frame_lz4(ARRAY_TYPE *buf, uint32_t bufsize, FILE *ofp)
+{
+    int8_t frame_type = FRAME_TYPE_LZ4;
+    uint32_t bytes_written = 0;
+    bytes_written += fwrite(&frame_type, 1, 1, ofp);
+
+    uint32_t decompressed_data_size = bufsize;
+    bytes_written += sizeof(decompressed_data_size) * fwrite(
+                         &decompressed_data_size, sizeof(decompressed_data_size), 1, stdout);
+
+#ifdef VERBOSE
+    uint64_t dt = time64();
+#endif
+    uint32_t compressed_size_bound = LZ4_compressBound(decompressed_data_size);
+    char* compressed_data = (char*)malloc(compressed_size_bound);
+    uint32_t compressed_data_size = LZ4_compress_default(
+                                        (char*)buf,
+                                        compressed_data,
+                                        decompressed_data_size,
+                                        compressed_size_bound);
+#ifdef VERBOSE
+    dt = time64() - dt;
+    fprintf(stderr, "LZ4 compression of keyframe in %lu μs with ratio %f\n", dt, (1.0 * compressed_data_size) / decompressed_data_size);
+#endif
+    bytes_written += sizeof(compressed_data_size) * fwrite(
+                         &compressed_data_size, sizeof(compressed_data_size), 1, stdout);
+    bytes_written += compressed_data_size * fwrite(compressed_data, compressed_data_size, 1, stdout);
+    free(compressed_data);
+
+#ifdef VERBOSE
+    fprintf(stderr, "RLE frame write efficiency %f\n", (1.0 * bytes_written) / bufsize);
+#endif
 
     return bytes_written;
 }
@@ -127,6 +157,29 @@ uint32_t read_frame_rle(FILE *ifp, uint32_t bufsize, ARRAY_TYPE *buf)
 
 #ifdef VERBOSE
     fprintf(stderr, "RLE frame efficiency %f\n", (1.0 * bytes_read) / bufsize);
+#endif
+    return bytes_read;
+}
+
+uint32_t read_frame_lz4(FILE *ifp, uint32_t bufsize, ARRAY_TYPE *buf)
+{
+    uint32_t bytes_read = 0;
+    uint32_t source_data_size;
+    uint32_t compressed_data_size;
+
+    bytes_read += sizeof(source_data_size) * fread(
+                      &source_data_size, sizeof(source_data_size), 1, ifp);
+    bytes_read += sizeof(compressed_data_size) * fread(
+                      &compressed_data_size, sizeof(compressed_data_size), 1, ifp);
+
+    char* compressed_data = (char*)malloc(compressed_data_size);
+    bytes_read += compressed_data_size * fread(compressed_data, compressed_data_size, 1, ifp);
+    uint32_t decompressed_data_size = LZ4_decompress_safe(
+                                          compressed_data, (char*)buf, compressed_data_size, source_data_size);
+    free(compressed_data);
+
+#ifdef VERBOSE
+    fprintf(stderr, "LZ4 frame efficiency %f\n", (1.0 * bytes_read) / bufsize);
 #endif
     return bytes_read;
 }
@@ -166,7 +219,18 @@ uint32_t read_frame(FILE *ifp, uint32_t bufsize, ARRAY_TYPE *buf, int8_t *frame_
 #endif
         uint32_t num_read = read_frame_rle(ifp, bufsize, buf);
 #ifdef VERBOSE
-        fprintf(stderr, "Took %lu μs to read %lu bytes of RLE frame\n", time64() - dtr, num_read * sizeof(ARRAY_TYPE));
+        fprintf(stderr, "Took %lu μs to read %lu bytes of RLE frame\n", time64() - dtr, num_read);
+#endif
+        return num_read;
+    }
+    case 2:
+    {
+#ifdef VERBOSE
+        uint64_t dtr = time64();
+#endif
+        uint32_t num_read = read_frame_lz4(ifp, bufsize, buf);
+#ifdef VERBOSE
+        fprintf(stderr, "Took %lu μs to read %lu bytes of LZ4 frame\n", time64() - dtr, num_read);
 #endif
         return num_read;
     }
@@ -203,7 +267,19 @@ void encode(uint32_t bytes_per_block)
     uint32_t numread = fread(buf_a, bytes_per_block, 1, ifp);
     fseek(ifp, 0, SEEK_SET);
 
-    write_frame_keyframe(buf_a, bytes_per_block, ofp);
+#ifdef VERBOSE
+{
+    fprintf(stderr, "Starting first LZ4 keyframe\n");
+    fflush(stdout);
+    uint64_t dt = time64();
+#endif
+    write_frame_lz4(buf_a, bytes_per_block, ofp);
+#ifdef VERBOSE
+    dt = time64() - dt;
+    fprintf(stderr, "Done first LZ4 keyframe in %lu μs\n", dt);
+    fflush(stdout);
+}
+#endif
     num_frames++;
     SWAP(buf_a, buf_b, buf_tmp);
     dt = time64() - dt;
@@ -259,9 +335,9 @@ void encode(uint32_t bytes_per_block)
         else
         {
             uint64_t dt = time64();
-            write_frame_keyframe(buf_diff, bytes_per_block, ofp);
+            write_frame_lz4(buf_diff, bytes_per_block, ofp);
             dt = time64() - dt;
-            fprintf(stderr, "Writing full frame, skipping RLE due to delta count in %lu μs\n", dt);
+            fprintf(stderr, "Writing full frame, skipping RLE due to delta count, in %lu μs\n", dt);
         }
         num_frames++;
         SWAP(buf_a, buf_b, buf_tmp);
@@ -324,7 +400,7 @@ void decode(uint32_t bytes_per_block)
 
         if ((dt2 - last_stats_time) > (STATS_INTERVAL * 1000000))
         {
-            fprintf(stderr, "Total frames: %u, Avg framerate: %f, Key frames: %u, Bytes read: %llu, Avg framesize: %f\n", num_frames, (1000000.0 * num_frames) / (dt2 - last_stats_time), num_keyframes, bytes_read, 1.0 * bytes_read / num_frames);
+            fprintf(stderr, "Total frames: %u, Avg framerate: %f, Key frames: %u, Bytes read: %lu, Avg framesize: %f\n", num_frames, (1000000.0 * num_frames) / (dt2 - last_stats_time), num_keyframes, bytes_read, 1.0 * bytes_read / num_frames);
 
             last_stats_time = dt2;
             bytes_read = 0;
@@ -367,6 +443,28 @@ void decode(uint32_t bytes_per_block)
 #endif
     }
 }
+
+// int main_lz4_test(int argc, char **argv)
+// {
+//     char mode = argv[1][0];
+
+//     if (mode == 'e')
+//     {
+//         const char* const src = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Lorem ipsum dolor site amat";
+//         ARRAY_TYPE* buf = (ARRAY_TYPE*) src;
+//         uint32_t bufsize = strlen(src) / sizeof(ARRAY_TYPE);
+//         write_frame_lz4(buf, bufsize, stdout);
+//     }
+//     else
+//     {
+//         char* src = (char*)malloc(4096);
+//         int8_t frame_type;
+//         fread(&frame_type, 1, 1, stdin);
+//         read_frame_lz4(stdin, 4096/ sizeof(ARRAY_TYPE), (ARRAY_TYPE*)src);
+//         printf("%s\n", src);
+//     }
+//     return 0;
+// }
 
 int main(int argc, char **argv)
 {

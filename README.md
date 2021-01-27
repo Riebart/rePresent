@@ -11,18 +11,18 @@ The goal here is to have a small standalone binary that can do approximate damag
 
 ### For the tablet
 
-Using either the toolchain for the reMarkable, or just `gcc` on any Raspberry Pi running a 32-bit OS:
+Using either the toolchain for the reMarkable, or just `gcc` on any Raspberry Pi running a 32-bit OS. Note that you'll need the liblz4 package to compile against for armhf, so doing it on a Raspberry Pi (`sudo apt install liblz4-dev`) might be simplest.
 
 ```bash
-gcc -O2 -static -o armhf blockdiff.c
+gcc -O2 -o amd64 -u LZ4_compressBound -llz4 -static blockdiff.c
 ```
 
 ### For the receiver
 
-On linux or WSL (v1 or v2):
+On linux or WSL (v1 or v2), after installing the lz4 library to link against:
 
 ```bash
-gcc -O2 blockdiff.c
+gcc -O2 -o amd64 -llz4 blockdiff.c
 ```
 
 On Windows
