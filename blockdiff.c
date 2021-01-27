@@ -31,7 +31,7 @@
 
 // The maximum number of pixels different from the last frame to use RLE.
 // Changes beyond this pixel count will force a keyframe
-#define MAX_DELTAS_FOR_RLE 100000
+#define MAX_DELTAS_FOR_RLE 10000
 
 // Seconds between a statistics output from the decoder.
 #define STATS_INTERVAL 15
@@ -121,6 +121,7 @@ uint32_t write_frame_lz4(ARRAY_TYPE *buf, uint32_t bufsize, FILE *ofp)
 #ifdef VERBOSE
     dt = time64() - dt;
     fprintf(stderr, "LZ4 compression of keyframe in %lu μs with ratio %f\n", dt, (1.0 * compressed_data_size) / decompressed_data_size);
+    dt = time64();
 #endif
     bytes_written += sizeof(compressed_data_size) * fwrite(
                          &compressed_data_size, sizeof(compressed_data_size), 1, stdout);
@@ -128,7 +129,9 @@ uint32_t write_frame_lz4(ARRAY_TYPE *buf, uint32_t bufsize, FILE *ofp)
     free(compressed_data);
 
 #ifdef VERBOSE
-    fprintf(stderr, "RLE frame write efficiency %f\n", (1.0 * bytes_written) / bufsize);
+    dt = time64() - dt;
+    fprintf(stderr, "LZ4 compressed data transmitted in %lu μs\n", dt);
+    fprintf(stderr, "LZ4 frame write efficiency %f\n", (1.0 * bytes_written) / bufsize);
 #endif
 
     return bytes_written;
@@ -167,6 +170,10 @@ uint32_t read_frame_lz4(FILE *ifp, uint32_t bufsize, ARRAY_TYPE *buf)
     uint32_t source_data_size;
     uint32_t compressed_data_size;
 
+#ifdef VERBOSE
+    uint64_t dt = time64();
+#endif
+
     bytes_read += sizeof(source_data_size) * fread(
                       &source_data_size, sizeof(source_data_size), 1, ifp);
     bytes_read += sizeof(compressed_data_size) * fread(
@@ -174,11 +181,18 @@ uint32_t read_frame_lz4(FILE *ifp, uint32_t bufsize, ARRAY_TYPE *buf)
 
     char* compressed_data = (char*)malloc(compressed_data_size);
     bytes_read += compressed_data_size * fread(compressed_data, compressed_data_size, 1, ifp);
+#ifdef VERBOSE
+    dt = time64() - dt;
+    fprintf(stderr, "LZ4 compressed data received in %lu μs\n", dt);
+    dt = time64();
+#endif
     uint32_t decompressed_data_size = LZ4_decompress_safe(
                                           compressed_data, (char*)buf, compressed_data_size, source_data_size);
     free(compressed_data);
 
 #ifdef VERBOSE
+    dt = time64() - dt;
+    fprintf(stderr, "LZ4 decompression of keyframe in %lu μs with ratio %f\n", dt, (1.0 * compressed_data_size) / decompressed_data_size);
     fprintf(stderr, "LZ4 frame efficiency %f\n", (1.0 * bytes_read) / bufsize);
 #endif
     return bytes_read;
@@ -320,7 +334,7 @@ void encode(uint32_t bytes_per_block)
         }
 
 #ifdef VERBOSE
-        fprintf(stderr, "Took %lu μs to diff frames\n", time64() - dt);
+        fprintf(stderr, "Took %lu μs to diff frames with %lu deltas\n", time64() - dt, num_deltas);
 #endif
 
         if (num_deltas < MAX_DELTAS_FOR_RLE)
@@ -411,7 +425,7 @@ void decode(uint32_t bytes_per_block)
         // Read the new frame, the last frame is in bufB
         numread = read_frame(ifp, bytes_per_block, diff, &frame_type);
 #ifdef VERBOSE
-        fprintf(stderr, "Took %lu μs to read diff\n", time64() - dt);
+        fprintf(stderr, "Took %lu μs to read diff\n", time64() - dt2);
 #endif
         if (numread == 0)
         {
@@ -432,14 +446,14 @@ void decode(uint32_t bytes_per_block)
             buf[i] ^= diff[i];
         }
 #ifdef VERBOSE
-        fprintf(stderr, "Took %lu μs to apply diff\n", time64() - dt);
+        fprintf(stderr, "Took %lu μs to apply diff\n", time64() - dt2);
 #endif
         dt2 = time64();
         fwrite(buf, sizeof(ARRAY_TYPE), bytes_per_block / sizeof(ARRAY_TYPE), ofp);
         num_frames++;
 
 #ifdef VERBOSE
-        fprintf(stderr, "Took %lu μs to write frame\n", time64() - dt);
+        fprintf(stderr, "Took %lu μs to write frame\n", time64() - dt2);
 #endif
     }
 }
