@@ -400,11 +400,12 @@ void decode(uint32_t bytes_per_block)
     bytes_read += numread;
 
     // Raw write of the framebuffer to stdout.
-    fwrite(buf, sizeof(ARRAY_TYPE), bytes_per_block / sizeof(ARRAY_TYPE), ofp);
+    uint32_t blocks_out = fwrite(buf, sizeof(ARRAY_TYPE), bytes_per_block / sizeof(ARRAY_TYPE), ofp);
 
     num_frames++;
 
 #ifdef VERBOSE
+    fprintf(stderr, "Wrote %u blocks of rawvideo frame\n", blocks_out);
     fprintf(stderr, "Finished setting up decoder in %lu μs\n", dt);
 #endif
 
@@ -449,10 +450,11 @@ void decode(uint32_t bytes_per_block)
         fprintf(stderr, "Took %lu μs to apply diff\n", time64() - dt2);
 #endif
         dt2 = time64();
-        fwrite(buf, sizeof(ARRAY_TYPE), bytes_per_block / sizeof(ARRAY_TYPE), ofp);
+        blocks_out = fwrite(buf, sizeof(ARRAY_TYPE), bytes_per_block / sizeof(ARRAY_TYPE), ofp);
         num_frames++;
 
 #ifdef VERBOSE
+        fprintf(stderr, "Wrote %u blocks of rawvideo frame\n", blocks_out);
         fprintf(stderr, "Took %lu μs to write frame\n", time64() - dt2);
 #endif
     }

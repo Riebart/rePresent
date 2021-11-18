@@ -14,7 +14,7 @@ The goal here is to have a small standalone binary that can do approximate damag
 Using either the toolchain for the reMarkable, or just `gcc` on any Raspberry Pi running a 32-bit OS. Note that you'll need the liblz4 package to compile against for armhf, so doing it on a Raspberry Pi (`sudo apt install liblz4-dev`) might be simplest.
 
 ```bash
-gcc -O2 -o amd64 -u LZ4_compressBound -llz4 -static blockdiff.c
+gcc -O2 -o armhf -u LZ4_compressBound -llz4 -static blockdiff.c
 ```
 
 ### For the receiver
