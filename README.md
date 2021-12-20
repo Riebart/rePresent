@@ -7,6 +7,16 @@ A mid-point between [reStream](https://github.com/rien/reStream) and [vM-vnc-ser
 
 The goal here is to have a small standalone binary that can do approximate damage tracking, encoded keyframes are regular intervals to ensure the screen stays in sync. A primary design objective is to offload as much processing to the receiver as possible, to keep the impacts on tablet performance and battery life minimal.
 
+## Support colours
+
+Some notes on the 16-bit colour codes used by the rM to represent the new colours:
+
+- Blue pen: `0xd39c`
+- Red pen: `0xaa52`
+- Yellow highlighter: `0x9ad6`
+- Green highlighter: `0xb6b5`
+- Pink highlighter: `0xd39c` (Note that this matches the blue pen, so your pink highligher is the same grey, and the same mapped colour, as the blue pen)
+
 ## Compiling
 
 ### For the tablet
@@ -22,13 +32,7 @@ gcc -O2 -o armhf -u LZ4_compressBound -llz4 -static blockdiff.c
 On linux or WSL (v1 or v2), after installing the lz4 library to link against:
 
 ```bash
-gcc -O2 -o amd64 -llz4 blockdiff.c
-```
-
-On Windows
-
-```bash
-TODO 😢
+gcc -O2 -o amd64 -u LZ4_compressBound -llz4 -static blockdiff.c
 ```
 
 ## Usage

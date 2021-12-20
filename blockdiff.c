@@ -26,7 +26,14 @@
     }
 
 #define MAX_READ_SIZE (1 << 24)
+
+#define ARRAY_TYPE_LENGTH 32
+#if ARRAY_TYPE_LENGTH == 32
 #define ARRAY_TYPE uint32_t
+#elif ARRAY_TYPE_LENGTH == 16
+#define ARRAY_TYPE uint16_t
+#endif
+
 #define RLE_TYPE ARRAY_TYPE
 
 // The maximum number of pixels different from the last frame to use RLE.
@@ -39,6 +46,79 @@
 // Target time per frame in seconds, the tool will sleep until at least this time has elapsed
 // before fetching the next frame.
 float FRAMETIME_TARGET = 0.2;
+
+struct colourmap_s
+{
+    uint16_t key, val;
+};
+
+// A real quick little Wolfram function to convert an RGB colour into an RGB565 16-bit hex value
+/*
+RGBtoRGB565 = Function[{r, g, b},
+  IntegerString[FromDigits[Flatten[{IntegerDigits[Round[31 r], 2, 5],
+      IntegerDigits[Round[63 g], 2, 6],
+      IntegerDigits[Round[31 b], 2, 5]}], 2], 16, 4]
+  ]
+*/
+
+const uint16_t NUM_COLOURMAPS = 4;
+const struct colourmap_s GREYVALUE_MAPPING[] = {
+    {0x9cd3, 0x001c}, // Blue pen, BUT ALSO PINK HIGHLIGHTER!
+    {0x52aa, 0xb800}, // Red pen
+    {0xd69a, 0xfff0}, // Yellow highlighter
+    {0xb5b6, 0x87f0}  // Green highlighter
+    //{0x9cd3, 0xfdfb}  // Pink highlighter, BUT ALSO BLUE PEN
+};
+
+#if ARRAY_TYPE_LENGTH == 16
+uint32_t colourmap(ARRAY_TYPE *buf, ARRAY_TYPE *obuf, uint32_t array_size)
+{
+    uint32_t num_pixels_mapped = 0;
+
+    for (uint32_t n = 0; n <= array_size; n++)
+    {
+        obuf[n] = buf[n];
+        for (int c = 0; c <= NUM_COLOURMAPS; c++)
+        {
+            if (obuf[n] == GREYVALUE_MAPPING[c].key)
+            {
+                obuf[n] = GREYVALUE_MAPPING[c].val;
+                num_pixels_mapped++;
+            }
+        }
+    }
+
+    return num_pixels_mapped;
+}
+#elif ARRAY_TYPE_LENGTH == 32
+uint32_t colourmap(ARRAY_TYPE *buf, ARRAY_TYPE *obuf, uint32_t array_size)
+{
+    uint32_t num_pixels_mapped = 0;
+
+    for (uint32_t n = 0; n <= array_size; n++)
+    {
+        obuf[n] = buf[n];
+        for (int c = 0; c < NUM_COLOURMAPS; c++)
+        {
+            // The low 16 bits
+            if ((obuf[n] & 0x0000ffff) == GREYVALUE_MAPPING[c].key)
+            {
+                obuf[n] = (obuf[n] & 0xffff0000) + GREYVALUE_MAPPING[c].val;
+                num_pixels_mapped++;
+            }
+
+            // The high 16 bits
+            if ((obuf[n] & 0xffff0000) == GREYVALUE_MAPPING[c].key)
+            {
+                obuf[n] = (obuf[n] & 0x0000ffff) + (GREYVALUE_MAPPING[c].val << 16);
+                num_pixels_mapped++;
+            }
+        }
+    }
+
+    return num_pixels_mapped;
+}
+#endif
 
 uint64_t time64()
 {
@@ -106,25 +186,25 @@ uint32_t write_frame_lz4(ARRAY_TYPE *buf, uint32_t bufsize, FILE *ofp)
 
     uint32_t decompressed_data_size = bufsize;
     bytes_written += sizeof(decompressed_data_size) * fwrite(
-                         &decompressed_data_size, sizeof(decompressed_data_size), 1, stdout);
+                                                          &decompressed_data_size, sizeof(decompressed_data_size), 1, stdout);
 
 #ifdef VERBOSE
     uint64_t dt = time64();
 #endif
     uint32_t compressed_size_bound = LZ4_compressBound(decompressed_data_size);
-    char* compressed_data = (char*)malloc(compressed_size_bound);
+    char *compressed_data = (char *)malloc(compressed_size_bound);
     uint32_t compressed_data_size = LZ4_compress_default(
-                                        (char*)buf,
-                                        compressed_data,
-                                        decompressed_data_size,
-                                        compressed_size_bound);
+        (char *)buf,
+        compressed_data,
+        decompressed_data_size,
+        compressed_size_bound);
 #ifdef VERBOSE
     dt = time64() - dt;
     fprintf(stderr, "LZ4 compression of keyframe in %lu μs with ratio %f\n", dt, (1.0 * compressed_data_size) / decompressed_data_size);
     dt = time64();
 #endif
     bytes_written += sizeof(compressed_data_size) * fwrite(
-                         &compressed_data_size, sizeof(compressed_data_size), 1, stdout);
+                                                        &compressed_data_size, sizeof(compressed_data_size), 1, stdout);
     bytes_written += compressed_data_size * fwrite(compressed_data, compressed_data_size, 1, stdout);
     free(compressed_data);
 
@@ -175,11 +255,11 @@ uint32_t read_frame_lz4(FILE *ifp, uint32_t bufsize, ARRAY_TYPE *buf)
 #endif
 
     bytes_read += sizeof(source_data_size) * fread(
-                      &source_data_size, sizeof(source_data_size), 1, ifp);
+                                                 &source_data_size, sizeof(source_data_size), 1, ifp);
     bytes_read += sizeof(compressed_data_size) * fread(
-                      &compressed_data_size, sizeof(compressed_data_size), 1, ifp);
+                                                     &compressed_data_size, sizeof(compressed_data_size), 1, ifp);
 
-    char* compressed_data = (char*)malloc(compressed_data_size);
+    char *compressed_data = (char *)malloc(compressed_data_size);
     bytes_read += compressed_data_size * fread(compressed_data, compressed_data_size, 1, ifp);
 #ifdef VERBOSE
     dt = time64() - dt;
@@ -187,7 +267,7 @@ uint32_t read_frame_lz4(FILE *ifp, uint32_t bufsize, ARRAY_TYPE *buf)
     dt = time64();
 #endif
     uint32_t decompressed_data_size = LZ4_decompress_safe(
-                                          compressed_data, (char*)buf, compressed_data_size, source_data_size);
+        compressed_data, (char *)buf, compressed_data_size, source_data_size);
     free(compressed_data);
 
 #ifdef VERBOSE
@@ -282,17 +362,17 @@ void encode(uint32_t bytes_per_block)
     fseek(ifp, 0, SEEK_SET);
 
 #ifdef VERBOSE
-{
-    fprintf(stderr, "Starting first LZ4 keyframe\n");
-    fflush(stdout);
-    uint64_t dt = time64();
+    {
+        fprintf(stderr, "Starting first LZ4 keyframe\n");
+        fflush(stdout);
+        uint64_t dt = time64();
 #endif
-    write_frame_lz4(buf_a, bytes_per_block, ofp);
+        write_frame_lz4(buf_a, bytes_per_block, ofp);
 #ifdef VERBOSE
-    dt = time64() - dt;
-    fprintf(stderr, "Done first LZ4 keyframe in %lu μs\n", dt);
-    fflush(stdout);
-}
+        dt = time64() - dt;
+        fprintf(stderr, "Done first LZ4 keyframe in %lu μs\n", dt);
+        fflush(stdout);
+    }
 #endif
     num_frames++;
     SWAP(buf_a, buf_b, buf_tmp);
@@ -389,6 +469,12 @@ void decode(uint32_t bytes_per_block)
     // Allocate two buffers, one for the last frame, and one for this frame.
     ARRAY_TYPE *buf = (ARRAY_TYPE *)malloc(bytes_per_block);
     ARRAY_TYPE *diff = (ARRAY_TYPE *)malloc(bytes_per_block);
+
+    // Allocate one more buffer as the output buffer that gets written to stdout
+    // This is different from the current frame from the tablet, as it contains mangled
+    // pixels that have been colourmap()-ed.
+    ARRAY_TYPE *obuf = (ARRAY_TYPE *)malloc(bytes_per_block);
+
     uint32_t num_frames = 0;
     uint64_t bytes_read = 0;
     uint32_t num_keyframes = 0;
@@ -398,6 +484,8 @@ void decode(uint32_t bytes_per_block)
     uint32_t numread = read_frame(ifp, bytes_per_block, buf, &frame_type);
     num_keyframes++;
     bytes_read += numread;
+
+    colourmap(buf, obuf, bytes_per_block / sizeof(ARRAY_TYPE));
 
     // Raw write of the framebuffer to stdout.
     uint32_t blocks_out = fwrite(buf, sizeof(ARRAY_TYPE), bytes_per_block / sizeof(ARRAY_TYPE), ofp);
@@ -433,7 +521,7 @@ void decode(uint32_t bytes_per_block)
             break;
         }
 
-        if (frame_type == FRAME_TYPE_FULL)
+        if ((frame_type == FRAME_TYPE_FULL) || (frame_type == FRAME_TYPE_LZ4))
         {
             num_keyframes++;
         }
@@ -449,8 +537,15 @@ void decode(uint32_t bytes_per_block)
 #ifdef VERBOSE
         fprintf(stderr, "Took %lu μs to apply diff\n", time64() - dt2);
 #endif
+
         dt2 = time64();
-        blocks_out = fwrite(buf, sizeof(ARRAY_TYPE), bytes_per_block / sizeof(ARRAY_TYPE), ofp);
+        uint32_t num_mapped_colours = colourmap(buf, obuf, bytes_per_block / sizeof(ARRAY_TYPE));
+#ifdef VERBOSE
+        fprintf(stderr, "Took %lu μs to colour %u pixels\n", time64() - dt2, num_mapped_colours);
+#endif
+
+        dt2 = time64();
+        blocks_out = fwrite(obuf, sizeof(ARRAY_TYPE), bytes_per_block / sizeof(ARRAY_TYPE), ofp);
         num_frames++;
 
 #ifdef VERBOSE

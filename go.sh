@@ -5,7 +5,7 @@
 
 tmpfile=`mktemp`
 
-(ssh -i ~/.ssh/reMarkable.id_rsa root@192.168.189.181 \
+(ssh -i ~/.ssh/reMarkable.id_rsa root@${RM_ADDR} \
     "./tools/armhf e 5271552 15" | \
     ./amd64 d 5271552 & echo "$!" > "$tmpfile") | pv | \
 ffplay.exe \
